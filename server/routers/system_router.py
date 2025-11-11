@@ -51,11 +51,6 @@ async def update_config_batch(items: dict = Body(...), current_user: User = Depe
     return config.dump_config()
 
 
-@system.post("/restart")
-async def restart_system(current_user: User = Depends(get_superadmin_user)):
-    """重启系统（仅超级管理员）"""
-    graph_base.start()
-    return {"message": "系统已重启"}
 
 
 @system.get("/logs")
@@ -99,22 +94,7 @@ def load_info_config():
 
     except Exception as e:
         logger.error(f"Failed to load info config: {e}")
-        return get_default_info_config()
-
-
-def get_default_info_config():
-    """获取默认信息配置"""
-    return {
-        "organization": {"name": "江南语析", "logo": "/favicon.svg", "avatar": "/avatar.jpg"},
-        "branding": {
-            "name": "Yuxi-Know",
-            "title": "Yuxi-Know",
-            "subtitle": "大模型驱动的知识库管理工具",
-            "description": "结合知识库与知识图谱，提供更准确、更全面的回答",
-        },
-        "features": ["📚 灵活知识库", "🕸️ 知识图谱集成", "🤖 多模型支持"],
-        "footer": {"copyright": "© 江南语析 2025 [WIP] v0.3.0"},
-    }
+        return {}
 
 
 @system.get("/info")

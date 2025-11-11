@@ -1,6 +1,8 @@
+import aiofiles
 import asyncio
 import os
 import traceback
+from collections.abc import Mapping
 from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
@@ -50,6 +52,56 @@ async def create_database(
         f"additional_params {additional_params}, llm_info {llm_info}"
     )
     try:
+        additional_params = {**(additional_params or {})}
+
+        def normalize_reranker_config(kb: str, params: dict) -> None:
+            reranker_cfg = params.get("reranker_config")
+            if kb not in {"chroma", "milvus"}:
+                if kb == "lightrag" and reranker_cfg:
+                    logger.warning("LightRAG does not support reranker, ignoring reranker_config")
+                    params.pop("reranker_config", None)
+                return
+
+            if not reranker_cfg:
+                params["reranker_config"] = {
+                    "enabled": False,
+                    "model": "",
+                    "recall_top_k": 50,
+                    "final_top_k": 10,
+                }
+                return
+
+            if not isinstance(reranker_cfg, Mapping):
+                raise HTTPException(status_code=400, detail="reranker_config must be an object")
+
+            enabled = bool(reranker_cfg.get("enabled", False))
+            model = (reranker_cfg.get("model") or "").strip()
+            recall_top_k = max(1, int(reranker_cfg.get("recall_top_k", 50)))
+            final_top_k = max(1, int(reranker_cfg.get("final_top_k", 10)))
+
+            if enabled:
+                if not model:
+                    raise HTTPException(status_code=400, detail="reranker_config.model is required when enabled")
+                if model not in config.reranker_names:
+                    raise HTTPException(status_code=400, detail=f"Unsupported reranker model: {model}")
+                if final_top_k > recall_top_k:
+                    logger.warning(
+                        f"final_top_k ({final_top_k}) cannot exceed recall_top_k ({recall_top_k}); "
+                        "adjusting recall_top_k to match final_top_k"
+                    )
+                    recall_top_k = final_top_k
+            else:
+                model = model if model in config.reranker_names else ""
+
+            params["reranker_config"] = {
+                "enabled": enabled,
+                "model": model,
+                "recall_top_k": recall_top_k,
+                "final_top_k": final_top_k,
+            }
+
+        normalize_reranker_config(kb_type, additional_params)
+
         embed_info = config.embed_model_names[embed_model_name]
         database_info = await knowledge_base.create_database(
             database_name, description, kb_type=kb_type, embed_info=embed_info, llm_info=llm_info, **additional_params
@@ -77,12 +129,16 @@ async def get_database_info(db_id: str, current_user: User = Depends(get_admin_u
 
 @knowledge.put("/databases/{db_id}")
 async def update_database_info(
-    db_id: str, name: str = Body(...), description: str = Body(...), current_user: User = Depends(get_admin_user)
+    db_id: str,
+    name: str = Body(...),
+    description: str = Body(...),
+    llm_info: dict = Body(None),
+    current_user: User = Depends(get_admin_user),
 ):
     """更新知识库信息"""
-    logger.debug(f"Update database {db_id} info: {name}, {description}")
+    logger.debug(f"Update database {db_id} info: {name}, {description}, llm_info: {llm_info}")
     try:
-        database = await knowledge_base.update_database(db_id, name, description)
+        database = await knowledge_base.update_database(db_id, name, description, llm_info)
         return {"message": "更新成功", "database": database}
     except Exception as e:
         logger.error(f"更新数据库失败 {e}, {traceback.format_exc()}")
@@ -180,11 +236,39 @@ async def add_documents(
                 await context.set_progress(progress, f"正在处理第 {idx}/{total} 个文档")
 
                 # 处理单个文档
-                result = await knowledge_base.add_content(db_id, [item], params=params)
-                processed_items.extend(result)
+                try:
+                    result = await knowledge_base.add_content(db_id, [item], params=params)
+                    processed_items.extend(result)
+                except Exception as doc_error:
+                    # 处理单个文档处理的所有异常（包括超时）
+                    logger.error(f"Document processing failed for {item}: {doc_error}")
+
+                    # 判断是否是超时异常
+                    error_type = "timeout" if isinstance(doc_error, TimeoutError) else "processing_error"
+                    error_msg = "处理超时" if isinstance(doc_error, TimeoutError) else "处理失败"
+
+                    processed_items.append({
+                        "item": item,
+                        "status": "failed",
+                        "error": f"{error_msg}: {str(doc_error)}",
+                        "error_type": error_type
+                    })
 
         except asyncio.CancelledError:
             await context.set_progress(100.0, "任务已取消")
+            raise
+        except Exception as task_error:
+            # 处理整体任务的其他异常（如内存不足、网络错误等）
+            logger.exception(f"Task processing failed: {task_error}")
+            await context.set_progress(100.0, f"任务处理失败: {str(task_error)}")
+            # 将所有未处理的文档标记为失败
+            for item in items[len(processed_items):]:
+                processed_items.append({
+                    "item": item,
+                    "status": "failed",
+                    "error": f"任务失败: {str(task_error)}",
+                    "error_type": "task_failed"
+                })
             raise
 
         item_type = "URL" if content_type == "url" else "文件"
@@ -414,6 +498,9 @@ async def get_knowledge_base_query_params(db_id: str, current_user: User = Depen
             raise HTTPException(status_code=404, detail="Database not found")
 
         kb_type = db_info.get("kb_type", "lightrag")
+        metadata = db_info.get("metadata", {}) or {}
+        reranker_config = metadata.get("reranker_config", {}) or {}
+        reranker_enabled = bool(reranker_config.get("enabled", False))
 
         # 根据知识库类型返回不同的查询参数
         if kb_type == "lightrag":
@@ -459,81 +546,143 @@ async def get_knowledge_base_query_params(db_id: str, current_user: User = Depen
                 ],
             }
         elif kb_type == "chroma":
-            params = {
-                "type": "chroma",
-                "options": [
+            top_k_default = reranker_config.get("final_top_k", 10)
+            params_list = [
+                {
+                    "key": "top_k",
+                    "label": "TopK",
+                    "type": "number",
+                    "default": top_k_default,
+                    "min": 1,
+                    "max": 100,
+                    "description": "返回的最大结果数量",
+                },
+                {
+                    "key": "similarity_threshold",
+                    "label": "相似度阈值",
+                    "type": "number",
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.1,
+                    "description": "过滤相似度低于此值的结果",
+                },
+                {
+                    "key": "include_distances",
+                    "label": "显示相似度",
+                    "type": "boolean",
+                    "default": True,
+                    "description": "在结果中显示相似度分数",
+                },
+                {
+                    "key": "use_reranker",
+                    "label": "启用重排序",
+                    "type": "boolean",
+                    "default": reranker_enabled,
+                    "description": "是否使用精排模型对检索结果进行重排序",
+                },
+                {
+                    "key": "recall_top_k",
+                    "label": "召回数量",
+                    "type": "number",
+                    "default": reranker_config.get("recall_top_k", 50),
+                    "min": 10,
+                    "max": 200,
+                    "description": "启用重排序时向量检索的候选数量",
+                },
+            ]
+
+            if config.reranker_names:
+                params_list.append(
                     {
-                        "key": "top_k",
-                        "label": "TopK",
-                        "type": "number",
-                        "default": 10,
-                        "min": 1,
-                        "max": 100,
-                        "description": "返回的最大结果数量",
-                    },
-                    {
-                        "key": "similarity_threshold",
-                        "label": "相似度阈值",
-                        "type": "number",
-                        "default": 0.0,
-                        "min": 0.0,
-                        "max": 1.0,
-                        "step": 0.1,
-                        "description": "过滤相似度低于此值的结果",
-                    },
-                    {
-                        "key": "include_distances",
-                        "label": "显示相似度",
-                        "type": "boolean",
-                        "default": True,
-                        "description": "在结果中显示相似度分数",
-                    },
-                ],
-            }
-        elif kb_type == "milvus":
-            params = {
-                "type": "milvus",
-                "options": [
-                    {
-                        "key": "top_k",
-                        "label": "TopK",
-                        "type": "number",
-                        "default": 10,
-                        "min": 1,
-                        "max": 100,
-                        "description": "返回的最大结果数量",
-                    },
-                    {
-                        "key": "similarity_threshold",
-                        "label": "相似度阈值",
-                        "type": "number",
-                        "default": 0.0,
-                        "min": 0.0,
-                        "max": 1.0,
-                        "step": 0.1,
-                        "description": "过滤相似度低于此值的结果",
-                    },
-                    {
-                        "key": "include_distances",
-                        "label": "显示相似度",
-                        "type": "boolean",
-                        "default": True,
-                        "description": "在结果中显示相似度分数",
-                    },
-                    {
-                        "key": "metric_type",
-                        "label": "距离度量类型",
+                        "key": "reranker_model",
+                        "label": "重排序模型",
                         "type": "select",
-                        "default": "COSINE",
+                        "default": reranker_config.get("model", ""),
                         "options": [
-                            {"value": "COSINE", "label": "余弦相似度", "description": "适合文本语义相似度"},
-                            {"value": "L2", "label": "欧几里得距离", "description": "适合数值型数据"},
-                            {"value": "IP", "label": "内积", "description": "适合标准化向量"},
+                            {"label": info.name, "value": model_id}
+                            for model_id, info in config.reranker_names.items()
                         ],
-                        "description": "向量相似度计算方法",
-                    },
-                ],
-            }
+                        "description": "覆盖默认配置，选择用于本次查询的重排序模型",
+                    }
+                )
+
+            params = {"type": "chroma", "options": params_list}
+        elif kb_type == "milvus":
+            top_k_default = reranker_config.get("final_top_k", 10)
+            params_list = [
+                {
+                    "key": "top_k",
+                    "label": "TopK",
+                    "type": "number",
+                    "default": top_k_default,
+                    "min": 1,
+                    "max": 100,
+                    "description": "返回的最大结果数量",
+                },
+                {
+                    "key": "similarity_threshold",
+                    "label": "相似度阈值",
+                    "type": "number",
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.1,
+                    "description": "过滤相似度低于此值的结果",
+                },
+                {
+                    "key": "include_distances",
+                    "label": "显示相似度",
+                    "type": "boolean",
+                    "default": True,
+                    "description": "在结果中显示相似度分数",
+                },
+                {
+                    "key": "metric_type",
+                    "label": "距离度量类型",
+                    "type": "select",
+                    "default": "COSINE",
+                    "options": [
+                        {"value": "COSINE", "label": "余弦相似度", "description": "适合文本语义相似度"},
+                        {"value": "L2", "label": "欧几里得距离", "description": "适合数值型数据"},
+                        {"value": "IP", "label": "内积", "description": "适合标准化向量"},
+                    ],
+                    "description": "向量相似度计算方法",
+                },
+                {
+                    "key": "use_reranker",
+                    "label": "启用重排序",
+                    "type": "boolean",
+                    "default": reranker_enabled,
+                    "description": "是否使用精排模型对检索结果进行重排序",
+                },
+                {
+                    "key": "recall_top_k",
+                    "label": "召回数量",
+                    "type": "number",
+                    "default": reranker_config.get("recall_top_k", 50),
+                    "min": 10,
+                    "max": 200,
+                    "description": "启用重排序时向量检索的候选数量",
+                },
+            ]
+
+            if config.reranker_names:
+                params_list.append(
+                    {
+                        "key": "reranker_model",
+                        "label": "重排序模型",
+                        "type": "select",
+                        "default": reranker_config.get("model", ""),
+                        "options": [
+                            {"label": info.name, "value": model_id}
+                            for model_id, info in config.reranker_names.items()
+                        ],
+                        "description": "覆盖默认配置，选择用于本次查询的重排序模型",
+                    }
+                )
+
+            params = {"type": "milvus", "options": params_list}
         else:
             # 未知类型，返回基本参数
             params = {
@@ -593,19 +742,26 @@ async def upload_file(
     basename, ext = os.path.splitext(file.filename)
     filename = f"{basename}_{hashstr(basename, 4, with_salt=True)}{ext}".lower()
     file_path = os.path.join(upload_dir, filename)
-    os.makedirs(upload_dir, exist_ok=True)
+
+    # 在线程池中执行同步文件系统操作，避免阻塞事件循环
+    await asyncio.to_thread(os.makedirs, upload_dir, exist_ok=True)
 
     file_bytes = await file.read()
 
-    content_hash = calculate_content_hash(file_bytes)
-    if knowledge_base.file_existed_in_db(db_id, content_hash):
+    # 在线程池中执行计算密集型操作，避免阻塞事件循环
+    content_hash = await asyncio.to_thread(calculate_content_hash, file_bytes)
+
+    # 在线程池中执行同步数据库查询，避免阻塞事件循环
+    file_exists = await asyncio.to_thread(knowledge_base.file_existed_in_db, db_id, content_hash)
+    if file_exists:
         raise HTTPException(
             status_code=409,
             detail="数据库中已经存在了相同文件，File with the same content already exists in this database",
         )
 
-    with open(file_path, "wb") as buffer:
-        buffer.write(file_bytes)
+    # 使用异步文件写入，避免阻塞事件循环
+    async with aiofiles.open(file_path, "wb") as buffer:
+        await buffer.write(file_bytes)
 
     return {
         "message": "File successfully uploaded",

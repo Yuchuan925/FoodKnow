@@ -136,10 +136,8 @@ class KnowledgeBase(ABC):
         """
         from src.utils import hashstr
 
-        from src.utils import hashstr
-
         # 从 kwargs 中获取 is_private 配置
-        is_private = kwargs.get('is_private', False)
+        is_private = kwargs.get("is_private", False)
         prefix = "kb_private_" if is_private else "kb_"
         db_id = f"{prefix}{hashstr(database_name, with_salt=True)}"
 
@@ -484,7 +482,7 @@ class KnowledgeBase(ABC):
         os.makedirs(general_uploads, exist_ok=True)
         return general_uploads
 
-    def update_database(self, db_id: str, name: str, description: str) -> dict:
+    def update_database(self, db_id: str, name: str, description: str, llm_info: dict = None) -> dict:
         """
         更新数据库
 
@@ -492,6 +490,7 @@ class KnowledgeBase(ABC):
             db_id: 数据库ID
             name: 新名称
             description: 新描述
+            llm_info: LLM配置信息（可选，仅用于 LightRAG 类型知识库）
 
         Returns:
             更新后的数据库信息
@@ -501,6 +500,11 @@ class KnowledgeBase(ABC):
 
         self.databases_meta[db_id]["name"] = name
         self.databases_meta[db_id]["description"] = description
+
+        # 如果提供了 llm_info，则更新（仅针对 LightRAG 类型）
+        if llm_info is not None:
+            self.databases_meta[db_id]["llm_info"] = llm_info
+
         self._save_metadata()
 
         return self.get_database_info(db_id)

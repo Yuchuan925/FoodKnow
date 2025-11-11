@@ -5,11 +5,69 @@ from typing import Annotated, Any
 from langchain.tools import tool
 from langchain_core.tools import StructuredTool
 from langchain_tavily import TavilySearch
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from src import config, graph_base, knowledge_base
 from src.utils import logger
 
+
+@tool(name_or_callable="计算器", description="可以对给定的2个数字选择进行 add, subtract, multiply, divide 运算")
+def calculator(a: float, b: float, operation: str) -> float:
+    try:
+        if operation == "add":
+            return a + b
+        elif operation == "subtract":
+            return a - b
+        elif operation == "multiply":
+            return a * b
+        elif operation == "divide":
+            if b == 0:
+                raise ZeroDivisionError("除数不能为零")
+            return a / b
+        else:
+            raise ValueError(f"不支持的运算类型: {operation}，仅支持 add, subtract, multiply, divide")
+    except Exception as e:
+        logger.error(f"Calculator error: {e}")
+        raise
+
+
+@tool(name_or_callable="人工审批工具(Debug)", description="请求人工审批工具，用于在执行重要操作前获得人类确认。")
+def get_approved_user_goal(
+    operation_description: str,
+)->dict:
+    """
+    请求人工审批，在执行重要操作前获得人类确认。
+
+    Args:
+        operation_description: 需要审批的操作描述，例如 "调用知识库工具"
+    Returns:
+        dict: 包含审批结果的字典，格式为 {"approved": bool, "message": str}
+    """
+    # 构建详细的中断信息
+    interrupt_info = {
+        "question": "是否批准以下操作？",
+        "operation": operation_description,
+    }
+
+    # 触发人工审批
+    is_approved = interrupt(interrupt_info)
+
+    # 返回审批结果
+    if is_approved:
+        result = {
+            "approved": True,
+            "message": f"✅ 操作已批准：{operation_description}",
+        }
+        print(f"✅ 人工审批通过: {operation_description}")
+    else:
+        result = {
+            "approved": False,
+            "message": f"❌ 操作被拒绝：{operation_description}",
+        }
+        print(f"❌ 人工审批被拒绝: {operation_description}")
+
+    return result
 
 @tool(name_or_callable="查询知识图谱", description="使用这个工具可以查询知识图谱中包含的三元组信息。")
 def query_knowledge_graph(query: Annotated[str, "The keyword to query knowledge graph."]) -> Any:
@@ -29,9 +87,7 @@ def query_knowledge_graph(query: Annotated[str, "The keyword to query knowledge 
 
 def get_static_tools() -> list:
     """注册静态工具"""
-    static_tools = [
-        query_knowledge_graph,
-    ]
+    static_tools = [query_knowledge_graph, get_approved_user_goal, calculator]
 
     # 检查是否启用网页搜索
     if config.enable_web_search:

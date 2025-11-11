@@ -3,6 +3,8 @@
     <!-- 用户消息 -->
     <p v-if="message.type === 'human'" class="message-text">{{ message.content }}</p>
 
+    <p v-else-if="message.type === 'system'" class="message-text-system">{{ message.content }}</p>
+
     <!-- 助手消息 -->
     <div v-else-if="message.type === 'ai'" class="assistant-message">
       <div v-if="parsedData.reasoning_content" class="reasoning-box">
@@ -28,9 +30,10 @@
       <div v-else-if="parsedData.reasoning_content"  class="empty-block"></div>
 
       <!-- 错误提示块 -->
-      <div v-if="message.error_type" class="error-hint" :class="{ 'error-interrupted': message.error_type === 'interrupted', 'error-unexpect': message.error_type === 'unexpect' }">
+      <div v-if="message.error_type" class="error-hint">
         <span v-if="message.error_type === 'interrupted'">回答生成已中断</span>
         <span v-else-if="message.error_type === 'unexpect'">生成过程中出现异常</span>
+        <span v-else-if="message.error_type === 'content_guard_blocked'">检测到敏感内容，已中断输出</span>
       </div>
 
       <div v-if="validToolCalls && validToolCalls.length > 0" class="tool-calls-container">
@@ -272,6 +275,19 @@ const toggleToolCall = (toolCallId) => {
     white-space: pre-line;
   }
 
+  .message-text-system {
+    max-width: 100%;
+    margin-bottom: 0;
+    white-space: pre-line;
+    color: var(--gray-600);
+    font-style: italic;
+    font-size: 14px;
+    padding: 8px 12px;
+    background-color: var(--gray-50);
+    border-left: 3px solid var(--gray-300);
+    border-radius: 4px;
+  }
+
   .err-msg {
     color: #d15252;
     border: 1px solid #f19999;
@@ -350,19 +366,9 @@ const toggleToolCall = (toolCallId) => {
     display: flex;
     align-items: center;
     gap: 8px;
-
-    &.error-interrupted {
-      background-color: #fffbeb;
-      // border: 1px solid #fbbf24;
-      color: #92400e;
-    }
-
-    &.error-unexpect {
-      background-color: #fef2f2;
-      // border: 1px solid #f87171;
-      color: #991b1b;
-    }
-
+    background-color: #fef2f2;
+    // border: 1px solid #f87171;
+    color: #991b1b;
     span {
       line-height: 1.5;
     }

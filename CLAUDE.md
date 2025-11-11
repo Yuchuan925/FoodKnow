@@ -1,1 +1,1 @@
-Read AGENTS.md
+You MUST read `./AGENTS.md`
