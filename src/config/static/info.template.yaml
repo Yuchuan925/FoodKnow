@@ -1,36 +1,37 @@
 # 单位信息配置文件
 # 用于配置网站的基本信息、品牌信息等
+# 修改后需要重启服务生效
 
 # 组织信息
 organization:
-  name: "江南语析"           # 完整组织名称
-  logo: "/favicon.svg"       # Logo文件路径（放在 web/public 目录下）
-  avatar: "/avatar.jpg"      # 头像文件路径（放在 web/public 目录下）
-  login_bg: "/login-bg.jpg"  # 登录背景图片路径（放在 web/public 目录下）
+  name: "江南大学"           # 完整组织名称
+  logo: "/jnu.svg"       # Logo文件路径（放在 web/public 目录下）
+  avatar: "/jnu.svg"      # 头像文件路径（放在 web/public 目录下）
+  login_bg: "/pics/图书馆.jpg"  # 登录背景图片路径（放在 web/public 目录下）
 
 # 项目信息
 branding:
-  name: "Yuxi-Know"
-  title: "Yuxi-Know: 更智能的知识库智能体平台"     # 系统标题
-  subtitle: "大模型驱动的知识库智能体平台"          # 副标题
+  name: "FoodKnow"
+  title: "食品安全知识图谱与智能体平台"                           # 系统标题
+  subtitle: "基于知识图谱与智能体的食品安全知识咨询平台"          # 副标题
 
+# 功能特性
 features:
-  - label: "GitHub Stars"
-    value: "3000+"
-    description: "开发者社区的认可与支持"
-    icon: "stars"
-  - label: "已解决 Issues"
-    value: "250+"
-    description: "持续改进和问题解决能力"
-    icon: "issues"
-  - label: "累计 Commits"
-    value: "1100+"
-    description: "活跃的开发迭代和功能更新"
-    icon: "commits"
-  - label: "开源协议"
-    value: "MIT 协议"
-    description: "完全免费，支持商业使用"
-    icon: "license"
+  - label: "知识图谱节点"
+    value: "7000+"
+    description: "覆盖食品安全领域的知识实体"
+  - label: "知识图谱关系"
+    value: "13000+"
+    description: "覆盖食品安全领域的知识关系"
+    icon: "graph"
+  - label: "知识条目"
+    value: "5000+"
+    description: "涵盖政策、教材、咨询以及文献等"
+    icon: "knowledge"
+  - label: "智能体"
+    value: "5 Agents"
+    description: "涵盖问答助手、数据库分析等"
+    icon: "agent"
 
 actions:
   - name: "演示视频"
@@ -50,4 +51,4 @@ actions:
 
 # 页脚信息
 footer:
-  copyright: "© 江南语析 2025 v0.4.0"
+  copyright: "© 江南大学 2026 FoodKnow"

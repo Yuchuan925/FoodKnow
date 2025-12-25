@@ -200,11 +200,7 @@
           </div>
 
           <!-- 页脚 -->
-          <div class="login-footer">
-            <a href="https://github.com/xerrors" target="_blank">联系我们</a>
-            <a href="https://github.com/xerrors/Yuxi-Know" target="_blank">使用帮助</a>
-            <a href="https://github.com/xerrors/Yuxi-Know/blob/main/LICENSE" target="_blank">隐私政策</a>
-          </div>
+          <FooterWithAgreements />
         </div>
       </div>
     </div>
@@ -220,6 +216,7 @@ import { useAgentStore } from '@/stores/agent';
 import { message } from 'ant-design-vue';
 import { healthApi } from '@/apis/system_api';
 import { UserOutlined, LockOutlined, WechatOutlined, QrcodeOutlined, ThunderboltOutlined, ExclamationCircleOutlined } from '@ant-design/icons-vue';
+import FooterWithAgreements from '@/components/FooterWithAgreements.vue';
 const router = useRouter();
 const userStore = useUserStore();
 const infoStore = useInfoStore();
